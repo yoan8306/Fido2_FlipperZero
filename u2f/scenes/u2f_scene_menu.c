@@ -41,12 +41,37 @@ bool u2f_scene_menu_on_event(void* context, SceneManagerEvent event) {
     if(event.type == SceneManagerEventTypeCustom) {
         if(event.event == SubmenuIndexU2F) {
             scene_manager_set_scene_state(app->scene_manager, U2fSceneMenu, SubmenuIndexU2F);
+            
+            // Arrêter le HID actuel si existant
+            if(app->u2f_hid) {
+                u2f_hid_stop(app->u2f_hid);
+                app->u2f_hid = NULL;
+            }
+            
+            // Activer le mode U2F
             app->mode = U2fModeU2F;
+            
+            // Réinstancier le HID avec le bon mode
+            app->u2f_hid = u2f_hid_start(app->u2f_instance, app);
+            
             scene_manager_next_scene(app->scene_manager, U2fSceneMain);
             consumed = true;
+            
         } else if(event.event == SubmenuIndexFIDO2) {
             scene_manager_set_scene_state(app->scene_manager, U2fSceneMenu, SubmenuIndexFIDO2);
+            
+            // Arrêter le HID actuel si existant
+            if(app->u2f_hid) {
+                u2f_hid_stop(app->u2f_hid);
+                app->u2f_hid = NULL;
+            }
+            
+            // Activer le mode FIDO2
             app->mode = U2fModeFIDO2;
+            
+            // Réinstancier le HID avec le bon mode
+            app->u2f_hid = u2f_hid_start(app->u2f_instance, app);
+            
             scene_manager_next_scene(app->scene_manager, U2fSceneFido2);
             consumed = true;
         }

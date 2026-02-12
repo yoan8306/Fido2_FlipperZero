@@ -96,14 +96,17 @@ void u2f_scene_main_on_enter(void* context) {
 
     app->timer = furi_timer_alloc(u2f_scene_main_timer_callback, FuriTimerTypeOnce, app);
 
-    app->u2f_instance = u2f_alloc();
-    app->u2f_ready = u2f_init(app->u2f_instance);
+    // ✅ NE PAS réallouer u2f_instance - il est déjà alloué dans u2f_app.c
+    // app->u2f_instance = u2f_alloc();  // ❌ SUPPRIME CETTE LIGNE
+    
+    app->u2f_ready = u2f_init(app->u2f_instance);  // Utilise l'existant
     if(app->u2f_ready == true) {
         u2f_set_event_callback(app->u2f_instance, u2f_scene_main_event_callback, app);
-        app->u2f_hid = u2f_hid_start(app->u2f_instance, app);
+        app->u2f_hid = u2f_hid_start(app->u2f_instance, app);  // ✅ BON : 2 arguments
         u2f_view_set_ok_callback(app->u2f_view, u2f_scene_main_ok_callback, app);
     } else {
-        u2f_free(app->u2f_instance);
+        // ✅ NE PAS libérer u2f_instance - sera libéré dans u2f_app_free()
+        // u2f_free(app->u2f_instance);
         u2f_view_set_state(app->u2f_view, U2fMsgError);
     }
 
@@ -117,6 +120,7 @@ void u2f_scene_main_on_exit(void* context) {
     furi_timer_free(app->timer);
     if(app->u2f_ready == true) {
         u2f_hid_stop(app->u2f_hid);
-        u2f_free(app->u2f_instance);
+        // ✅ NE PAS libérer u2f_instance - sera libéré dans u2f_app_free()
+        // u2f_free(app->u2f_instance);
     }
 }
