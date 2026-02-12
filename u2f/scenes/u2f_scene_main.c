@@ -98,6 +98,9 @@ void u2f_scene_main_on_enter(void* context) {
 
     // ✅ NE PAS réallouer u2f_instance - il est déjà alloué dans u2f_app.c
     // app->u2f_instance = u2f_alloc();  // ❌ SUPPRIME CETTE LIGNE
+		if(!app->u2f_hid) {
+    			app->u2f_hid = u2f_hid_start(app->u2f_instance, app);
+		}
     
     app->u2f_ready = u2f_init(app->u2f_instance);  // Utilise l'existant
     if(app->u2f_ready == true) {
@@ -118,6 +121,11 @@ void u2f_scene_main_on_exit(void* context) {
     notification_message_block(app->notifications, &sequence_reset_rgb);
     furi_timer_stop(app->timer);
     furi_timer_free(app->timer);
+
+		if(app->u2f_hid) {
+    			u2f_hid_stop(app->u2f_hid);
+    			app->u2f_hid = NULL;
+		}
     if(app->u2f_ready == true) {
         u2f_hid_stop(app->u2f_hid);
         // ✅ NE PAS libérer u2f_instance - sera libéré dans u2f_app_free()

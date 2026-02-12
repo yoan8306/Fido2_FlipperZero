@@ -3,12 +3,6 @@
 void u2f_scene_fido2_on_enter(void* context) {
     U2fApp* app = context;
     
-    // ✅ INITIALISER LE HID EN MODE FIDO2
-    if(!app->u2f_hid) {
-        app->u2f_hid = u2f_hid_start(app->u2f_instance, app);
-    }
-    
-    // Réutiliser le widget pour afficher le statut
     widget_reset(app->widget);
     
     widget_add_string_element(
@@ -27,7 +21,7 @@ void u2f_scene_fido2_on_enter(void* context) {
         AlignCenter,
         AlignCenter,
         FontPrimary,
-        "USB Connected");
+        "Connected");
     
     widget_add_string_element(
         app->widget,
@@ -51,25 +45,12 @@ void u2f_scene_fido2_on_enter(void* context) {
 }
 
 bool u2f_scene_fido2_on_event(void* context, SceneManagerEvent event) {
-    U2fApp* app = context;
-    UNUSED(app);
-    // Permettre de revenir au menu
-    if(event.type == SceneManagerEventTypeBack) {
-        return true;  // Consume l'événement
-    }
-    
+    UNUSED(context);
+    UNUSED(event);
     return false;
 }
-
-
 
 void u2f_scene_fido2_on_exit(void* context) {
     U2fApp* app = context;
     widget_reset(app->widget);
-    
-    // ✅ Arrêter le HID en quittant la scène FIDO2
-    if(app->u2f_hid) {
-        u2f_hid_stop(app->u2f_hid);
-        app->u2f_hid = NULL;
-    }
 }

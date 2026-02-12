@@ -58,7 +58,7 @@ U2fApp* u2f_app_alloc() {
 
     // ORIGINAL - Initialisation U2F
     app->u2f_instance = u2f_alloc();
-    app->u2f_hid = u2f_hid_start(app->u2f_instance, app);
+    app->u2f_hid = NULL;  // USB sera démarré dans les scènes
     
     // NOUVEAU - Mode par défaut
     app->mode = U2fModeU2F;
