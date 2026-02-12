@@ -52,7 +52,7 @@ void u2f_scene_fido2_on_enter(void* context) {
 
 bool u2f_scene_fido2_on_event(void* context, SceneManagerEvent event) {
     U2fApp* app = context;
-    
+    UNUSED(app);
     // Permettre de revenir au menu
     if(event.type == SceneManagerEventTypeBack) {
         return true;  // Consume l'événement
@@ -60,6 +60,8 @@ bool u2f_scene_fido2_on_event(void* context, SceneManagerEvent event) {
     
     return false;
 }
+
+
 
 void u2f_scene_fido2_on_exit(void* context) {
     U2fApp* app = context;
