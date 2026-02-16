@@ -26,34 +26,6 @@ static void debug_log(const char* msg) {
 }
 
 /**
- * @brief Convert FS_Error to string for debugging
- */
-static const char* fs_error_to_string(FS_Error error) {
-    switch(error) {
-    case FSE_OK:
-        return "OK";
-    case FSE_NOT_READY:
-        return "NOT_READY";
-    case FSE_EXIST:
-        return "EXIST";
-    case FSE_NOT_EXIST:
-        return "NOT_EXIST";
-    case FSE_INVALID_NAME:
-        return "INVALID_NAME";
-    case FSE_INVALID_PARAMETER:
-        return "INVALID_PARAMETER";
-    case FSE_DENIED:
-        return "DENIED";
-    case FSE_ALREADY_OPEN:
-        return "ALREADY_OPEN";
-    case FSE_INTERNAL:
-        return "INTERNAL";
-    default:
-        return "UNKNOWN";
-    }
-}
-
-/**
  * @brief Complete definition of credential store
  */
 struct Fido2CredentialStore {
@@ -73,21 +45,20 @@ bool fido2_data_init(void) {
     debug_log("Storage record opened");
 
     // Test if SD card is writable - FIDO2 needs write access for credentials
-    FURI_LOG_I(TAG, "Testing SD card write access...");
+    FURI_LOG_I(TAG, "Testing SD card write access in U2F folder...");
     debug_log("Testing SD card write access");
     
     File* test_file = storage_file_alloc(storage);
     bool write_test_passed = false;
     
-    // Try to create a test file
-    if(storage_file_open(test_file, EXT_PATH("fido2_write_test.tmp"), FSAM_WRITE, FSOM_CREATE_ALWAYS)) {
-        // Write something
+    // Try to create a test file in the U2F folder (which should exist)
+    if(storage_file_open(test_file, EXT_PATH("u2f/fido2_write_test.tmp"), FSAM_WRITE, FSOM_CREATE_ALWAYS)) {
         const char* test_data = "FIDO2 write test";
         if(storage_file_write(test_file, test_data, strlen(test_data)) == strlen(test_data)) {
             storage_file_close(test_file);
             
             // Try to delete it
-            if(storage_simply_remove(storage, EXT_PATH("fido2_write_test.tmp"))) {
+            if(storage_simply_remove(storage, EXT_PATH("u2f/fido2_write_test.tmp"))) {
                 write_test_passed = true;
                 FURI_LOG_I(TAG, "SD card write test PASSED");
                 debug_log("SD card write test PASSED");
@@ -114,62 +85,18 @@ bool fido2_data_init(void) {
         return false;
     }
 
-    // Check if directory exists
+    // Check if U2F directory exists (it should, as U2F works)
     bool dir_exists = storage_dir_exists(storage, FIDO2_DATA_FOLDER);
-    FURI_LOG_I(TAG, "Directory %s: %s", FIDO2_DATA_FOLDER, dir_exists ? "exists" : "does not exist");
-    debug_log(dir_exists ? "Directory exists" : "Directory does not exist");
-
     if(!dir_exists) {
-        FURI_LOG_I(TAG, "Creating FIDO2 data directory: %s", FIDO2_DATA_FOLDER);
-        debug_log("Creating directory");
-        
-        // Use storage_common_mkdir for better error information
-        FS_Error error = storage_common_mkdir(storage, FIDO2_DATA_FOLDER);
-        const char* error_str = fs_error_to_string(error);
-        
-        FURI_LOG_I(TAG, "storage_common_mkdir returned: %d (%s)", error, error_str);
-        
-        // Create a detailed log message
-        char log_msg[64];
-        snprintf(log_msg, sizeof(log_msg), "mkdir returned: %s", error_str);
-        debug_log(log_msg);
-        
-        if(error == FSE_OK) {
-            debug_log("Directory created successfully");
-            FURI_LOG_I(TAG, "Directory created successfully");
-        } else if(error == FSE_EXIST) {
-            debug_log("Directory already exists (created by another process?)");
-            FURI_LOG_I(TAG, "Directory already exists");
-        } else {
-            FURI_LOG_E(TAG, "Failed to create directory, error: %d (%s)", error, error_str);
-            debug_log("Failed to create directory");
-            
-            // Log more details about the error
-            char error_detail[64];
-            snprintf(error_detail, sizeof(error_detail), "mkdir error: %s", error_str);
-            debug_log(error_detail);
-            
-            // Don't fail immediately - try to continue anyway
-            // Maybe the directory was created by another process
-            FURI_LOG_W(TAG, "Continuing despite mkdir error - directory might already exist");
-            debug_log("Continuing despite mkdir error");
-        }
+        FURI_LOG_W(TAG, "U2F directory does not exist, but write test passed - continuing anyway");
+        debug_log("U2F directory missing but continuing");
     } else {
-        FURI_LOG_I(TAG, "Directory already exists, no need to create");
-        debug_log("Directory already exists");
-    }
-
-    // Verify directory exists (or try to proceed anyway)
-    if(!storage_dir_exists(storage, FIDO2_DATA_FOLDER)) {
-        FURI_LOG_W(TAG, "Directory does not exist after creation attempt, but continuing");
-        debug_log("Directory missing but continuing");
-        // Don't fail - maybe we can still write files
-    } else {
-        debug_log("Directory verified");
+        FURI_LOG_I(TAG, "U2F directory exists");
+        debug_log("U2F directory exists");
     }
 
     furi_record_close(RECORD_STORAGE);
-    FURI_LOG_I(TAG, "fido2_data_init - SUCCESS (continuing)");
+    FURI_LOG_I(TAG, "fido2_data_init - SUCCESS");
     debug_log("fido2_data_init - SUCCESS");
     return true;
 }

@@ -33,6 +33,7 @@ static void u2f_scene_main_event_callback(U2fNotifyEvent evt, void* context) {
         view_dispatcher_send_custom_event(app->view_dispatcher, U2fCustomEventRegister);
         break;
     case U2fNotifyAuth:
+        // Correction: utiliser U2fCustomEventAuth au lieu de UfCustomEventAuth
         view_dispatcher_send_custom_event(app->view_dispatcher, U2fCustomEventAuth);
         break;
     case U2fNotifyAuthSuccess:

@@ -8,9 +8,10 @@
 extern "C" {
 #endif
 
-#define FIDO2_DATA_FOLDER EXT_PATH("fido2/")
-#define FIDO2_CRED_FILE   FIDO2_DATA_FOLDER "credentials.dat"
-#define FIDO2_CNT_FILE     FIDO2_DATA_FOLDER "counters.dat"
+// Use existing U2F folder instead of creating a new one
+#define FIDO2_DATA_FOLDER EXT_PATH("u2f/")
+#define FIDO2_CRED_FILE   FIDO2_DATA_FOLDER "fido2_credentials.dat"
+#define FIDO2_CNT_FILE    FIDO2_DATA_FOLDER "fido2_counters.dat"
 
 /**
  * @brief Initialize FIDO2 data storage
