@@ -1,40 +1,27 @@
-#include "u2f_app_i.h"
+#include "u2f_scene.h"
 
-// Generated scene handler on_enter functions
-#define ADD_SCENE(prefix, name, id) void prefix##_scene_##name##_on_enter(void*);
-#include "u2f_scene_config.h"
-#undef ADD_SCENE
-
-// Generated scene handler on_event functions
-#define ADD_SCENE(prefix, name, id) \
-    bool prefix##_scene_##name##_on_event(void*, SceneManagerEvent);
-#include "u2f_scene_config.h"
-#undef ADD_SCENE
-
-// Generated scene handler on_exit functions
-#define ADD_SCENE(prefix, name, id) void prefix##_scene_##name##_on_exit(void*);
-#include "u2f_scene_config.h"
-#undef ADD_SCENE
-
-// Generated scene list  
-void (*const u2f_scene_on_enter_handlers[])(void*) = {
+// Generate scene on_enter handlers array
 #define ADD_SCENE(prefix, name, id) prefix##_scene_##name##_on_enter,
+void (*const u2f_scene_on_enter_handlers[])(void*) = {
 #include "u2f_scene_config.h"
-#undef ADD_SCENE
 };
+#undef ADD_SCENE
 
-bool (*const u2f_scene_on_event_handlers[])(void*, SceneManagerEvent) = {
+// Generate scene on_event handlers array
 #define ADD_SCENE(prefix, name, id) prefix##_scene_##name##_on_event,
+bool (*const u2f_scene_on_event_handlers[])(void* context, SceneManagerEvent event) = {
 #include "u2f_scene_config.h"
-#undef ADD_SCENE
 };
+#undef ADD_SCENE
 
-void (*const u2f_scene_on_exit_handlers[])(void*) = {
+// Generate scene on_exit handlers array
 #define ADD_SCENE(prefix, name, id) prefix##_scene_##name##_on_exit,
+void (*const u2f_scene_on_exit_handlers[])(void* context) = {
 #include "u2f_scene_config.h"
-#undef ADD_SCENE
 };
+#undef ADD_SCENE
 
+// Initialize scene handlers configuration structure
 const SceneManagerHandlers u2f_scene_handlers = {
     .on_enter_handlers = u2f_scene_on_enter_handlers,
     .on_event_handlers = u2f_scene_on_event_handlers,

@@ -7,7 +7,15 @@
 #include <lib/toolbox/args.h>
 #include <furi_hal_usb_hid_u2f.h>
 #include <storage/storage.h>
+#include <furi_hal_usb_hid_u2f.h>
+#include <storage/storage.h>
 
+// FIDO2 support
+#include "u2f_app_i.h"
+#include "fido2/fido2_ctap.h"
+#include "fido2/fido2_credential.h"
+
+#undef TAG
 #define TAG "U2fHid"
 
 #define WORKER_TAG TAG "Worker"
@@ -24,6 +32,7 @@
 #define U2F_HID_INIT  (U2F_HID_TYPE_INIT | 0x06) // Channel initialization
 #define U2F_HID_WINK  (U2F_HID_TYPE_INIT | 0x08) // Send device identification wink
 #define U2F_HID_ERROR (U2F_HID_TYPE_INIT | 0x3f) // Error response
+#define U2F_HID_CBOR  (U2F_HID_TYPE_INIT | 0x10) // CTAP2 CBOR command
 
 #define U2F_HID_ERR_NONE          0x00 // No error
 #define U2F_HID_ERR_INVALID_CMD   0x01 // Invalid command
@@ -64,6 +73,11 @@ struct U2fHid {
     bool lock;
     U2fData* u2f_instance;
     struct U2fHid_packet packet;
+    
+    // FIDO2 support
+    U2fApp* app;
+    Fido2Ctap* fido2_ctap;
+    Fido2CredentialStore* fido2_store;
 };
 
 static void u2f_hid_event_callback(HidU2fEvent ev, void* context) {
@@ -126,6 +140,77 @@ static void u2f_hid_send_error(U2fHid* u2f_hid, uint8_t error) {
     u2f_hid_send_response(u2f_hid);
 }
 
+static bool u2f_hid_parse_fido2(U2fHid* u2f_hid) {
+     FURI_LOG_I(WORKER_TAG, "Processing CBOR command");
+        
+        // Vérifier que FIDO2 est initialisé
+        if(!u2f_hid->fido2_ctap || !u2f_hid->fido2_store) {
+            FURI_LOG_E(WORKER_TAG, "FIDO2 not initialized!");
+            u2f_hid_send_error(u2f_hid, U2F_HID_ERR_OTHER);
+            return false;
+        }
+        
+        // Vérifier la longueur
+        if(u2f_hid->packet.len == 0 || u2f_hid->packet.len > U2F_HID_MAX_PAYLOAD_LEN) {
+            FURI_LOG_E(WORKER_TAG, "Invalid CBOR length: %u", u2f_hid->packet.len);
+            u2f_hid_send_error(u2f_hid, U2F_HID_ERR_INVALID_LEN);
+            return false;
+        }
+        
+        uint8_t response[1024];
+        memset(response, 0, sizeof(response));
+        
+        FURI_LOG_I(WORKER_TAG, "Calling fido2_ctap_process...");
+        size_t response_len = fido2_ctap_process(
+            u2f_hid->fido2_ctap,
+            u2f_hid->packet.payload,
+            u2f_hid->packet.len,
+            response,
+            sizeof(response));
+        
+        FURI_LOG_I(WORKER_TAG, "CTAP process returned %u bytes", response_len);
+        
+        if(response_len > 0 && response_len <= sizeof(u2f_hid->packet.payload)) {
+            u2f_hid->packet.len = response_len;
+            memcpy(u2f_hid->packet.payload, response, response_len);
+            u2f_hid_send_response(u2f_hid);
+            FURI_LOG_I(WORKER_TAG, "FIDO2 response sent");
+            return true;
+        } else {
+            FURI_LOG_E(WORKER_TAG, "Invalid response length: %u", response_len);
+            u2f_hid_send_error(u2f_hid, U2F_HID_ERR_OTHER);
+            return false;
+        }
+    
+    
+    // Commandes communes (PING, INIT, WINK)
+    if(u2f_hid->packet.cmd == U2F_HID_PING) {
+        u2f_hid_send_response(u2f_hid);
+        return true;
+    } else if(u2f_hid->packet.cmd == U2F_HID_INIT) {
+        if((u2f_hid->packet.len != 8) || (u2f_hid->packet.cid != U2F_HID_BROADCAST_CID))
+            return false;
+        u2f_hid->packet.len = 17;
+        uint32_t random_cid = furi_hal_random_get();
+        memcpy(&(u2f_hid->packet.payload[8]), &random_cid, sizeof(uint32_t));
+        u2f_hid->packet.payload[12] = 2;
+        u2f_hid->packet.payload[13] = 1;
+        u2f_hid->packet.payload[14] = 0;
+        u2f_hid->packet.payload[15] = 1;
+        u2f_hid->packet.payload[16] = 1;
+        u2f_hid_send_response(u2f_hid);
+        return true;
+    } else if(u2f_hid->packet.cmd == U2F_HID_WINK) {
+        if(u2f_hid->packet.len != 0) return false;
+        u2f_wink(u2f_hid->u2f_instance);
+        u2f_hid->packet.len = 0;
+        u2f_hid_send_response(u2f_hid);
+        return true;
+    }
+    
+    return false;
+}
+
 static bool u2f_hid_parse_request(U2fHid* u2f_hid) {
     FURI_LOG_D(
         WORKER_TAG,
@@ -133,6 +218,11 @@ static bool u2f_hid_parse_request(U2fHid* u2f_hid) {
         u2f_hid->packet.cid,
         u2f_hid->packet.cmd,
         u2f_hid->packet.len);
+
+	// Router vers FIDO2 si mode FIDO2
+    if(u2f_hid->app && u2f_hid->app->mode == U2fModeFIDO2) {
+        return u2f_hid_parse_fido2(u2f_hid);
+    }
 
     if(u2f_hid->packet.cmd == U2F_HID_PING) { // PING - echo request back
         u2f_hid_send_response(u2f_hid);
@@ -291,10 +381,21 @@ static int32_t u2f_hid_worker(void* context) {
     return 0;
 }
 
-U2fHid* u2f_hid_start(U2fData* u2f_inst) {
+U2fHid* u2f_hid_start(U2fData* u2f_inst, U2fApp* app) {
     U2fHid* u2f_hid = malloc(sizeof(U2fHid));
 
     u2f_hid->u2f_instance = u2f_inst;
+    
+    // Initialiser FIDO2
+    u2f_hid->app = app;
+    if(app) {
+        u2f_hid->fido2_store = fido2_credential_store_alloc();
+        u2f_hid->fido2_ctap = fido2_ctap_alloc(u2f_hid->fido2_store);
+        FURI_LOG_I(TAG, "FIDO2 support enabled");
+    } else {
+        u2f_hid->fido2_store = NULL;
+        u2f_hid->fido2_ctap = NULL;
+    }
 
     u2f_hid->thread = furi_thread_alloc_ex("U2fHidWorker", 2048, u2f_hid_worker, u2f_hid);
     furi_thread_start(u2f_hid->thread);
@@ -306,5 +407,14 @@ void u2f_hid_stop(U2fHid* u2f_hid) {
     furi_thread_flags_set(furi_thread_get_id(u2f_hid->thread), WorkerEvtStop);
     furi_thread_join(u2f_hid->thread);
     furi_thread_free(u2f_hid->thread);
+    
+    // Libérer FIDO2
+    if(u2f_hid->fido2_ctap) {
+        fido2_ctap_free(u2f_hid->fido2_ctap);
+    }
+    if(u2f_hid->fido2_store) {
+        fido2_credential_store_free(u2f_hid->fido2_store);
+    }
+    
     free(u2f_hid);
 }

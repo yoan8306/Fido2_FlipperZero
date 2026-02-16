@@ -3,11 +3,9 @@
 #include <dolphin/dolphin.h>
 #include <furi_hal.h>
 #include "../u2f.h"
-#include "../fido2.h"
 
 #define U2F_REQUEST_TIMEOUT 500
 #define U2F_SUCCESS_TIMEOUT 3000
-#define TAG "U2fMain"
 
 static void u2f_scene_main_ok_callback(InputType type, void* context) {
     UNUSED(type);
@@ -32,27 +30,6 @@ static void u2f_scene_main_event_callback(U2fNotifyEvent evt, void* context) {
     else if(evt == U2fNotifyDisconnect)
         view_dispatcher_send_custom_event(app->view_dispatcher, U2fCustomEventDisconnect);
     else if(evt == U2fNotifyError)
-        view_dispatcher_send_custom_event(app->view_dispatcher, U2fCustomEventDataError);
-}
-
-static void fido2_scene_main_event_callback(Fido2NotifyEvent evt, void* context) {
-    furi_assert(context);
-    U2fApp* app = context;
-    // Mapper les événements FIDO2 vers les événements U2F (pour compatibilité)
-    // À adapter selon les besoins réels de FIDO2
-    if(evt == Fido2NotifyRegister)
-        view_dispatcher_send_custom_event(app->view_dispatcher, U2fCustomEventRegister);
-    else if(evt == Fido2NotifyAuth)
-        view_dispatcher_send_custom_event(app->view_dispatcher, U2fCustomEventAuth);
-    else if(evt == Fido2NotifyAuthSuccess)
-        view_dispatcher_send_custom_event(app->view_dispatcher, U2fCustomEventAuthSuccess);
-    else if(evt == Fido2NotifyWink)
-        view_dispatcher_send_custom_event(app->view_dispatcher, U2fCustomEventWink);
-    else if(evt == Fido2NotifyConnect)
-        view_dispatcher_send_custom_event(app->view_dispatcher, U2fCustomEventConnect);
-    else if(evt == Fido2NotifyDisconnect)
-        view_dispatcher_send_custom_event(app->view_dispatcher, U2fCustomEventDisconnect);
-    else if(evt == Fido2NotifyError)
         view_dispatcher_send_custom_event(app->view_dispatcher, U2fCustomEventDataError);
 }
 
@@ -101,11 +78,7 @@ bool u2f_scene_main_on_event(void* context, SceneManagerEvent event) {
             u2f_view_set_state(app->u2f_view, U2fMsgIdle);
         } else if(event.event == U2fCustomEventConfirm) {
             if(app->event_cur != U2fCustomEventNone) {
-                if(app->fido_mode == FidoModeU2F) {
-                    u2f_confirm_user_present(app->u2f_instance);
-                } else if(app->fido_mode == FidoModeFIDO2 && app->fido2_instance) {
-                    fido2_confirm_user_present((Fido2Data*)app->fido2_instance);
-                }
+                u2f_confirm_user_present(app->u2f_instance);
             }
         } else if(event.event == U2fCustomEventDataError) {
             notification_message(app->notifications, &sequence_set_red_255);
@@ -117,40 +90,29 @@ bool u2f_scene_main_on_event(void* context, SceneManagerEvent event) {
 
     return consumed;
 }
-
 void u2f_scene_main_on_enter(void* context) {
     U2fApp* app = context;
+    
+    FURI_LOG_I("U2F", "Entering U2F main scene, mode=%s", 
+               app->mode == U2fModeU2F ? "U2F" : "FIDO2");
 
     app->timer = furi_timer_alloc(u2f_scene_main_timer_callback, FuriTimerTypeOnce, app);
-    app->usb_initialized = false;
 
-    // Initialisation basée sur le mode sélectionné
-    if(app->fido_mode == FidoModeU2F) {
-        FURI_LOG_I(TAG, "Initializing U2F (FIDO1) mode");
-        app->u2f_instance = u2f_alloc();
-        app->u2f_ready = u2f_init(app->u2f_instance);
-        if(app->u2f_ready == true) {
-            u2f_set_event_callback(app->u2f_instance, u2f_scene_main_event_callback, app);
-            // Initialiser l'USB maintenant (U2F)
-            app->u2f_hid = u2f_hid_start(app->u2f_instance);
-            app->usb_initialized = true;
-            u2f_view_set_ok_callback(app->u2f_view, u2f_scene_main_ok_callback, app);
-            u2f_view_set_state(app->u2f_view, U2fMsgNotConnected);  // En attente de connexion
-        } else {
-            u2f_free(app->u2f_instance);
-            app->u2f_instance = NULL;
-            u2f_view_set_state(app->u2f_view, U2fMsgError);
-        }
-    } else if(app->fido_mode == FidoModeFIDO2) {
-        FURI_LOG_I(TAG, "Initializing FIDO2 mode");
-        // À implémenter complètement dans une version future
-        // Pour l'instant, on affiche juste un message et on passe en mode erreur
-        app->fido2_instance = NULL;  // Sera alloué quand l'implémentation sera faite
-        app->usb_initialized = false;
-        
-        // Message temporaire pour indiquer que FIDO2 n'est pas encore implémenté
+    // S'assurer que le HID est démarré
+    if(!app->u2f_hid) {
+        FURI_LOG_I("U2F", "Starting HID from main scene");
+        app->u2f_hid = u2f_hid_start(app->u2f_instance, app);
+    }
+    
+    app->u2f_ready = u2f_init(app->u2f_instance);
+    if(app->u2f_ready == true) {
+        FURI_LOG_I("U2F", "U2F initialized successfully");
+        u2f_set_event_callback(app->u2f_instance, u2f_scene_main_event_callback, app);
+        u2f_view_set_ok_callback(app->u2f_view, u2f_scene_main_ok_callback, app);
+        u2f_view_set_state(app->u2f_view, U2fMsgNotConnected);
+    } else {
+        FURI_LOG_E("U2F", "U2F initialization failed");
         u2f_view_set_state(app->u2f_view, U2fMsgError);
-        FURI_LOG_E(TAG, "FIDO2 mode not yet implemented");
     }
 
     view_dispatcher_switch_to_view(app->view_dispatcher, U2fAppViewMain);
@@ -159,26 +121,16 @@ void u2f_scene_main_on_enter(void* context) {
 void u2f_scene_main_on_exit(void* context) {
     U2fApp* app = context;
     notification_message_block(app->notifications, &sequence_reset_rgb);
-    furi_timer_stop(app->timer);
-    furi_timer_free(app->timer);
     
-    // Désinitialiser l'USB si initialisé
-    if(app->usb_initialized) {
-        if(app->fido_mode == FidoModeU2F && app->u2f_ready && app->u2f_instance) {
-            u2f_hid_stop(app->u2f_hid);
-            u2f_free(app->u2f_instance);
-            app->u2f_instance = NULL;
-            app->u2f_hid = NULL;
-        } else if(app->fido_mode == FidoModeFIDO2 && app->fido2_instance) {
-            // À implémenter : arrêt FIDO2
-            // fido2_hid_stop(app->fido2_hid);
-            // fido2_free((Fido2Data*)app->fido2_instance);
-            app->fido2_instance = NULL;
-        }
-        app->usb_initialized = false;
+    if(app->timer) {
+        furi_timer_stop(app->timer);
+        furi_timer_free(app->timer);
+        app->timer = NULL;
     }
-    
-    // Réinitialiser le mode pour forcer une nouvelle sélection au prochain lancement
-    // (optionnel - si on veut garder le mode en mémoire, supprimer cette ligne)
-    app->fido_mode = FidoModeNone;
+
+    // Arrêter HID mais pas libérer l'instance U2F
+    if(app->u2f_hid) {
+        u2f_hid_stop(app->u2f_hid);
+        app->u2f_hid = NULL;
+    }
 }

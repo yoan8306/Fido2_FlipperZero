@@ -14,7 +14,7 @@ void u2f_scene_error_on_enter(void* context) {
     U2fApp* app = context;
 
     if(app->error == U2fAppErrorNoFiles) {
-        widget_add_icon_element(app->widget, 0, 0, &I_SDQuestion_35x43);
+       // widget_add_icon_element(app->widget, 0, 0, &I_SDQuestion_35x43);
         widget_add_string_multiline_element(
             app->widget,
             81,
