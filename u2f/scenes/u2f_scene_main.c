@@ -21,6 +21,13 @@ static void u2f_scene_main_ok_callback(InputType type, void* context) {
 static void u2f_scene_main_event_callback(U2fNotifyEvent evt, void* context) {
     furi_assert(context);
     U2fApp* app = context;
+    
+    furi_mutex_acquire(app->data_mutex, FuriWaitForever);
+    bool exiting = app->exiting;
+    furi_mutex_release(app->data_mutex);
+    
+    if(exiting) return;
+    
     switch(evt) {
     case U2fNotifyRegister:
         view_dispatcher_send_custom_event(app->view_dispatcher, U2fCustomEventRegister);
@@ -65,6 +72,12 @@ static void fido2_scene_main_event_callback(Fido2AppNotifyEvent evt, void* conte
     furi_assert(context);
     U2fApp* app = context;
     
+    furi_mutex_acquire(app->data_mutex, FuriWaitForever);
+    bool exiting = app->exiting;
+    furi_mutex_release(app->data_mutex);
+    
+    if(exiting) return;
+    
     switch(evt) {
     case Fido2AppNotifyConnect:
         FURI_LOG_I(TAG, "FIDO2 Connect event");
@@ -78,22 +91,6 @@ static void fido2_scene_main_event_callback(Fido2AppNotifyEvent evt, void* conte
         FURI_LOG_E(TAG, "FIDO2 Error event");
         view_dispatcher_send_custom_event(app->view_dispatcher, U2fCustomEventDataError);
         break;
-    }
-}
-
-/**
- * @brief Wrapper function for FIDO2 connection state changes
- */
-static void fido2_connection_state_callback(void* context, bool connected) {
-    furi_assert(context);
-    U2fApp* app = context;
-    
-    if(connected) {
-        FURI_LOG_I(TAG, "FIDO2 device connected");
-        view_dispatcher_send_custom_event(app->view_dispatcher, U2fCustomEventConnect);
-    } else {
-        FURI_LOG_I(TAG, "FIDO2 device disconnected");
-        view_dispatcher_send_custom_event(app->view_dispatcher, U2fCustomEventDisconnect);
     }
 }
 
@@ -114,6 +111,49 @@ static void debug_log(const char* msg) {
     furi_record_close(RECORD_STORAGE);
 }
 
+/**
+ * @brief Thread-safe connection state callback for FIDO2
+ */
+static void fido2_connection_state_callback(void* context, bool connected) {
+    furi_assert(context);
+    U2fApp* app = (U2fApp*)context;
+    
+    // Check if app is still valid with mutex protection
+    furi_mutex_acquire(app->data_mutex, FuriWaitForever);
+    
+    bool exiting = app->exiting;
+    bool view_valid = app->view_dispatcher_valid;
+    ViewDispatcher* view_dispatcher = app->view_dispatcher;
+    
+    furi_mutex_release(app->data_mutex);
+    
+    // Log for debugging
+    char log_msg[64];
+    snprintf(log_msg, sizeof(log_msg), "conn cb: %d, exit=%d, view=%d", 
+             connected, exiting, view_valid);
+    debug_log(log_msg);
+    
+    // Safety checks
+    if(exiting) {
+        FURI_LOG_W(TAG, "App exiting, ignoring connection event");
+        return;
+    }
+    
+    if(!view_valid || !view_dispatcher) {
+        FURI_LOG_E(TAG, "View dispatcher invalid, cannot send event");
+        return;
+    }
+    
+    // Send event through view_dispatcher (thread-safe)
+    if(connected) {
+        FURI_LOG_I(TAG, "FIDO2 device connected - sending event");
+        view_dispatcher_send_custom_event(view_dispatcher, U2fCustomEventConnect);
+    } else {
+        FURI_LOG_I(TAG, "FIDO2 device disconnected - sending event");
+        view_dispatcher_send_custom_event(view_dispatcher, U2fCustomEventDisconnect);
+    }
+}
+
 static void u2f_scene_main_timer_callback(void* context) {
     furi_assert(context);
     U2fApp* app = context;
@@ -125,39 +165,70 @@ bool u2f_scene_main_on_event(void* context, SceneManagerEvent event) {
     U2fApp* app = context;
     bool consumed = false;
 
+    // Check if app is exiting
+    furi_mutex_acquire(app->data_mutex, FuriWaitForever);
+    bool exiting = app->exiting;
+    furi_mutex_release(app->data_mutex);
+    
+    if(exiting) return false;
+
     if(event.type == SceneManagerEventTypeCustom) {
-        if(event.event == U2fCustomEventConnect) {
+        // Use %lu for uint32_t event.event
+        FURI_LOG_I(TAG, "Custom event: %lu", event.event);
+        
+        switch(event.event) {
+        case U2fCustomEventConnect:
             furi_timer_stop(app->timer);
             u2f_view_set_state(app->u2f_view, U2fMsgIdle);
-        } else if(event.event == U2fCustomEventDisconnect) {
+            consumed = true;
+            break;
+            
+        case U2fCustomEventDisconnect:
             furi_timer_stop(app->timer);
             app->event_cur = U2fCustomEventNone;
             u2f_view_set_state(app->u2f_view, U2fMsgNotConnected);
-        } else if((event.event == U2fCustomEventRegister) || (event.event == U2fCustomEventAuth)) {
+            consumed = true;
+            break;
+            
+        case U2fCustomEventRegister:
+        case U2fCustomEventAuth:
             furi_timer_start(app->timer, U2F_REQUEST_TIMEOUT);
             if(app->event_cur == U2fCustomEventNone) {
                 app->event_cur = event.event;
-                if(event.event == U2fCustomEventRegister)
+                if(event.event == U2fCustomEventRegister) {
                     u2f_view_set_state(app->u2f_view, U2fMsgRegister);
-                else if(event.event == U2fCustomEventAuth)
+                } else {
                     u2f_view_set_state(app->u2f_view, U2fMsgAuth);
+                }
                 notification_message(app->notifications, &sequence_display_backlight_on);
                 notification_message(app->notifications, &sequence_single_vibro);
             }
             notification_message(app->notifications, &sequence_blink_magenta_10);
-        } else if(event.event == U2fCustomEventWink) {
+            consumed = true;
+            break;
+            
+        case U2fCustomEventWink:
             notification_message(app->notifications, &sequence_blink_magenta_10);
-        } else if(event.event == U2fCustomEventAuthSuccess) {
+            consumed = true;
+            break;
+            
+        case U2fCustomEventAuthSuccess:
             notification_message_block(app->notifications, &sequence_set_green_255);
             dolphin_deed(DolphinDeedU2fAuthorized);
             furi_timer_start(app->timer, U2F_SUCCESS_TIMEOUT);
             app->event_cur = U2fCustomEventNone;
             u2f_view_set_state(app->u2f_view, U2fMsgSuccess);
-        } else if(event.event == U2fCustomEventTimeout) {
+            consumed = true;
+            break;
+            
+        case U2fCustomEventTimeout:
             notification_message_block(app->notifications, &sequence_reset_rgb);
             app->event_cur = U2fCustomEventNone;
             u2f_view_set_state(app->u2f_view, U2fMsgIdle);
-        } else if(event.event == U2fCustomEventConfirm) {
+            consumed = true;
+            break;
+            
+        case U2fCustomEventConfirm:
             if(app->event_cur != U2fCustomEventNone) {
                 if(app->fido_mode == FidoModeU2F && app->u2f_instance) {
                     u2f_confirm_user_present(app->u2f_instance);
@@ -165,12 +236,19 @@ bool u2f_scene_main_on_event(void* context, SceneManagerEvent event) {
                     fido2_app_confirm_user_present((Fido2App*)app->fido2_instance);
                 }
             }
-        } else if(event.event == U2fCustomEventDataError) {
+            consumed = true;
+            break;
+            
+        case U2fCustomEventDataError:
             notification_message(app->notifications, &sequence_set_red_255);
             furi_timer_stop(app->timer);
             u2f_view_set_state(app->u2f_view, U2fMsgError);
+            consumed = true;
+            break;
+            
+        default:
+            break;
         }
-        consumed = true;
     }
 
     return consumed;
@@ -179,7 +257,11 @@ bool u2f_scene_main_on_event(void* context, SceneManagerEvent event) {
 void u2f_scene_main_on_enter(void* context) {
     U2fApp* app = context;
 
-    // Write initial debug log
+    // Reset exiting flag when entering
+    furi_mutex_acquire(app->data_mutex, FuriWaitForever);
+    app->exiting = false;
+    furi_mutex_release(app->data_mutex);
+    
     debug_log("=== U2F Scene Main On Enter ===");
 
     app->timer = furi_timer_alloc(u2f_scene_main_timer_callback, FuriTimerTypeOnce, app);
@@ -206,95 +288,71 @@ void u2f_scene_main_on_enter(void* context) {
         }
     } else if(app->fido_mode == FidoModeFIDO2) {
         FURI_LOG_I(TAG, "========== FIDO2 MODE SELECTED ==========");
-        debug_log("FIDO2 mode selected - STEP 0");
-        
-        FURI_LOG_I(TAG, "Step 1: Allocating FIDO2 app");
-        debug_log("Step 1: fido2_app_alloc");
+        debug_log("FIDO2 mode selected");
         
         app->fido2_instance = fido2_app_alloc();
         if(!app->fido2_instance) {
-            FURI_LOG_E(TAG, "Step 1 FAILED: fido2_app_alloc returned NULL");
-            debug_log("Step 1 FAILED: fido2_app_alloc returned NULL");
+            FURI_LOG_E(TAG, "Failed to allocate FIDO2 app");
+            debug_log("FIDO2 alloc FAILED");
             u2f_view_set_state(app->u2f_view, U2fMsgFido2Ready);
         } else {
-            FURI_LOG_I(TAG, "Step 2: fido2_app_alloc SUCCESS");
-            debug_log("Step 2: fido2_app_alloc SUCCESS");
-            
-            FURI_LOG_I(TAG, "Step 3: Initializing FIDO2 app");
-            debug_log("Step 3: fido2_app_init");
+            debug_log("FIDO2 app allocated");
             
             if(!fido2_app_init((Fido2App*)app->fido2_instance)) {
-                FURI_LOG_E(TAG, "Step 3 FAILED: fido2_app_init returned false");
-                debug_log("Step 3 FAILED: fido2_app_init returned false");
+                FURI_LOG_E(TAG, "Failed to initialize FIDO2 app");
+                debug_log("FIDO2 init FAILED");
                 fido2_app_free((Fido2App*)app->fido2_instance);
                 app->fido2_instance = NULL;
                 u2f_view_set_state(app->u2f_view, U2fMsgFido2Ready);
             } else {
-                FURI_LOG_I(TAG, "Step 4: fido2_app_init SUCCESS");
-                debug_log("Step 4: fido2_app_init SUCCESS");
+                debug_log("FIDO2 init SUCCESS");
                 
-                // Set user presence callback
+                // Set callbacks
                 fido2_app_set_user_presence_callback(
                     (Fido2App*)app->fido2_instance,
                     fido2_scene_user_presence_callback,
                     app);
-                FURI_LOG_I(TAG, "Step 5: User presence callback set");
-                debug_log("Step 5: User presence callback set");
                 
-                // Set event callback
                 fido2_app_set_event_callback(
                     (Fido2App*)app->fido2_instance,
                     fido2_scene_main_event_callback,
                     app);
-                FURI_LOG_I(TAG, "Step 6: Event callback set");
-                debug_log("Step 6: Event callback set");
                 
                 // Get CTAP instance
-                FURI_LOG_I(TAG, "Step 7: Getting CTAP instance");
-                debug_log("Step 7: fido2_app_get_ctap");
-                
                 Fido2Ctap* ctap = fido2_app_get_ctap((Fido2App*)app->fido2_instance);
-                if(!ctap) {
-                    FURI_LOG_E(TAG, "Step 7 FAILED: fido2_app_get_ctap returned NULL");
-                    debug_log("Step 7 FAILED: fido2_app_get_ctap returned NULL");
-                    fido2_app_free((Fido2App*)app->fido2_instance);
-                    app->fido2_instance = NULL;
-                    u2f_view_set_state(app->u2f_view, U2fMsgFido2Ready);
-                } else {
-                    FURI_LOG_I(TAG, "Step 8: CTAP instance OK, calling fido2_hid_start");
-                    debug_log("Step 8: Calling fido2_hid_start");
+                if(ctap) {
+                    debug_log("Starting FIDO2 HID");
                     
-                    // Start HID transport
                     app->fido2_hid = fido2_hid_start(ctap);
                     
                     if(app->fido2_hid) {
-                        FURI_LOG_I(TAG, "Step 9: fido2_hid_start SUCCESS");
-                        debug_log("Step 9: fido2_hid_start SUCCESS");
+                        debug_log("FIDO2 HID started");
                         app->usb_initialized = true;
                         
-                        // Set connection callback
+                        // Set connection callback with thread-safe wrapper
                         fido2_hid_set_connection_callback(
                             app->fido2_hid,
                             fido2_connection_state_callback,
                             app);
-                        FURI_LOG_I(TAG, "Step 10: Connection callback set");
-                        debug_log("Step 10: Connection callback set");
                         
-                        // Set OK callback
                         u2f_view_set_ok_callback(app->u2f_view, u2f_scene_main_ok_callback, app);
-                        
-                        // Show ready message
                         u2f_view_set_state(app->u2f_view, U2fMsgFido2Ready);
                         
-                        FURI_LOG_I(TAG, "========== FIDO2 INITIALIZATION COMPLETE ==========");
-                        debug_log("FIDO2 initialization COMPLETE");
+                        FURI_LOG_I(TAG, "FIDO2 initialization complete");
+                        debug_log("FIDO2 ready");
                     } else {
-                        FURI_LOG_E(TAG, "Step 9 FAILED: fido2_hid_start returned NULL");
-                        debug_log("Step 9 FAILED: fido2_hid_start returned NULL");
+                        FURI_LOG_E(TAG, "FIDO2 HID start failed");
+                        debug_log("HID start FAILED");
                         fido2_app_free((Fido2App*)app->fido2_instance);
                         app->fido2_instance = NULL;
                         u2f_view_set_state(app->u2f_view, U2fMsgFido2Ready);
                     }
+                } else {
+                    FURI_LOG_E(TAG, "Failed to get CTAP instance");
+                    debug_log("CTAP instance FAILED");
+                    fido2_app_free((Fido2App*)app->fido2_instance);
+                    app->fido2_instance = NULL;
+                    u2f_view_set_state(app->u2f_view, U2fMsgFido2Ready);
                 }
             }
         }
@@ -306,19 +364,31 @@ void u2f_scene_main_on_enter(void* context) {
 void u2f_scene_main_on_exit(void* context) {
     U2fApp* app = context;
     
-    debug_log("U2F scene main on exit");
+    FURI_LOG_I(TAG, "u2f_scene_main_on_exit");
+    debug_log("Scene main on exit");
+    
+    // Set exiting flag to prevent callbacks during cleanup
+    furi_mutex_acquire(app->data_mutex, FuriWaitForever);
+    app->exiting = true;
+    furi_mutex_release(app->data_mutex);
     
     notification_message_block(app->notifications, &sequence_reset_rgb);
-    furi_timer_stop(app->timer);
-    furi_timer_free(app->timer);
+    
+    if(app->timer) {
+        furi_timer_stop(app->timer);
+        furi_timer_free(app->timer);
+        app->timer = NULL;
+    }
 
     // Clean up USB and instances
     if(app->usb_initialized) {
         if(app->fido_mode == FidoModeU2F && app->u2f_instance) {
-            u2f_hid_stop(app->u2f_hid);
+            if(app->u2f_hid) {
+                u2f_hid_stop(app->u2f_hid);
+                app->u2f_hid = NULL;
+            }
             u2f_free(app->u2f_instance);
             app->u2f_instance = NULL;
-            app->u2f_hid = NULL;
             debug_log("U2F cleaned up");
         } else if(app->fido_mode == FidoModeFIDO2 && app->fido2_instance) {
             if(app->fido2_hid) {
@@ -333,7 +403,8 @@ void u2f_scene_main_on_exit(void* context) {
         app->usb_initialized = false;
     }
 
-    // Reset mode for next launch
+    // Reset mode
     app->fido_mode = FidoModeNone;
-    debug_log("=== U2F Scene Main On Exit ===");
+    
+    debug_log("Scene main on exit complete");
 }

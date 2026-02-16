@@ -81,8 +81,8 @@ bool fido2_app_init(Fido2App* app) {
     debug_log("fido2_data_init - STEP B");
     
     if(!fido2_data_init()) {
-        FURI_LOG_E(TAG, "fido2_data_init FAILED");
-        debug_log("fido2_data_init FAILED");
+        FURI_LOG_E(TAG, "fido2_data_init FAILED - SD card not writable");
+        debug_log("fido2_data_init FAILED - SD card not writable");
         return false;
     }
     debug_log("fido2_data_init SUCCESS");

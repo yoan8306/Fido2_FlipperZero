@@ -1,5 +1,7 @@
 #include "u2f_app_i.h"
 #include "u2f_data.h"
+#include "fido2_app.h"
+#include "fido2_hid.h"
 #include <furi.h>
 #include <furi_hal.h>
 #include <storage/storage.h>
@@ -26,11 +28,18 @@ static void u2f_app_tick_event_callback(void* context) {
 
 U2fApp* u2f_app_alloc(void) {
     U2fApp* app = malloc(sizeof(U2fApp));
+    
+    // Initialize thread safety
+    app->data_mutex = furi_mutex_alloc(FuriMutexTypeNormal);
+    app->exiting = false;
+    app->view_dispatcher_valid = false;
 
     app->gui = furi_record_open(RECORD_GUI);
     app->notifications = furi_record_open(RECORD_NOTIFICATION);
 
     app->view_dispatcher = view_dispatcher_alloc();
+    app->view_dispatcher_valid = true;
+    
     app->scene_manager = scene_manager_alloc(&u2f_scene_handlers, app);
     view_dispatcher_set_event_callback_context(app->view_dispatcher, app);
     view_dispatcher_set_tick_event_callback(
@@ -42,7 +51,7 @@ U2fApp* u2f_app_alloc(void) {
 
     view_dispatcher_attach_to_gui(app->view_dispatcher, app->gui, ViewDispatcherTypeFullscreen);
 
-    // Submenu for mode selection (NOUVEAU)
+    // Submenu for mode selection
     app->submenu = submenu_alloc();
     view_dispatcher_add_view(
         app->view_dispatcher, U2fAppViewSelectMode, submenu_get_view(app->submenu));
@@ -56,21 +65,21 @@ U2fApp* u2f_app_alloc(void) {
     view_dispatcher_add_view(
         app->view_dispatcher, U2fAppViewMain, u2f_view_get_view(app->u2f_view));
 
-    // Initialisation des états
+    // Initialize state
     app->fido_mode = FidoModeNone;
     app->usb_initialized = false;
     app->u2f_instance = NULL;
     app->fido2_instance = NULL;
     app->u2f_hid = NULL;
+    app->fido2_hid = NULL;
 
-    // Déverrouiller l'USB mais NE PAS l'initialiser
+    // Unlock USB but don't initialize
     furi_hal_usb_unlock();
     
     FURI_LOG_I(TAG, "USB unlocked, waiting for mode selection");
 
-    // Vérifier si les fichiers U2F existent
+    // Check if U2F files exist
     if(u2f_data_check(true)) {
-        // Aller au menu de sélection au lieu de Main directement
         FURI_LOG_I(TAG, "U2F data found, showing mode selection");
         scene_manager_next_scene(app->scene_manager, U2fSceneSelectMode);
     } else {
@@ -86,37 +95,55 @@ void u2f_app_free(U2fApp* app) {
     furi_assert(app);
 
     FURI_LOG_I(TAG, "Freeing U2F app resources");
+    
+    // Set exiting flag to prevent callbacks
+    furi_mutex_acquire(app->data_mutex, FuriWaitForever);
+    app->exiting = true;
+    furi_mutex_release(app->data_mutex);
 
-    // S'assurer que l'USB est arrêté proprement
+    // Clean up USB and instances
     if(app->usb_initialized) {
         if(app->fido_mode == FidoModeU2F && app->u2f_instance) {
-            u2f_hid_stop(app->u2f_hid);
+            if(app->u2f_hid) {
+                u2f_hid_stop(app->u2f_hid);
+                app->u2f_hid = NULL;
+            }
             u2f_free(app->u2f_instance);
+            app->u2f_instance = NULL;
         } else if(app->fido_mode == FidoModeFIDO2 && app->fido2_instance) {
-            // À implémenter : libération des ressources FIDO2
-            // fido2_hid_stop(app->fido2_hid);
-            // fido2_free((Fido2Data*)app->fido2_instance);
+            if(app->fido2_hid) {
+                fido2_hid_stop(app->fido2_hid);
+                app->fido2_hid = NULL;
+            }
+            fido2_app_free((Fido2App*)app->fido2_instance);
+            app->fido2_instance = NULL;
         }
+        app->usb_initialized = false;
     }
 
-    // Views
+    // Mark view_dispatcher as invalid before removing views
+    app->view_dispatcher_valid = false;
+
+    // Remove and free views
     view_dispatcher_remove_view(app->view_dispatcher, U2fAppViewSelectMode);
     submenu_free(app->submenu);
     
     view_dispatcher_remove_view(app->view_dispatcher, U2fAppViewMain);
     u2f_view_free(app->u2f_view);
 
-    // Custom Widget
     view_dispatcher_remove_view(app->view_dispatcher, U2fAppViewError);
     widget_free(app->widget);
 
-    // View dispatcher
+    // Free view dispatcher and scene manager
     view_dispatcher_free(app->view_dispatcher);
     scene_manager_free(app->scene_manager);
 
     // Close records
     furi_record_close(RECORD_GUI);
     furi_record_close(RECORD_NOTIFICATION);
+
+    // Free mutex
+    furi_mutex_free(app->data_mutex);
 
     free(app);
     

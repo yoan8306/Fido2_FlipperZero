@@ -3,7 +3,6 @@
 #include "u2f_app.h"
 #include "scenes/u2f_scene.h"
 #include "fido_mode.h"
-#include "fido2.h"
 
 #include <gui/gui.h>
 #include <assets_icons.h>
@@ -24,46 +23,59 @@ typedef enum {
 
 typedef enum {
     U2fCustomEventNone = 0,
-
     U2fCustomEventConnect,
     U2fCustomEventDisconnect,
     U2fCustomEventDataError,
-
     U2fCustomEventRegister,
     U2fCustomEventAuth,
     U2fCustomEventAuthSuccess,
     U2fCustomEventWink,
-
     U2fCustomEventTimeout,
-
     U2fCustomEventConfirm,
-
     U2fCustomEventErrorBack,
-
 } GpioCustomEvent;
 
 typedef enum {
-    U2fAppViewSelectMode = 0,  // Nouvelle vue pour la sélection de mode
+    U2fAppViewSelectMode = 0,
     U2fAppViewError,
     U2fAppViewMain,
 } U2fAppView;
 
+/**
+ * @brief Main application structure with thread-safe guards
+ */
 struct U2fApp {
+    // Core system
     Gui* gui;
     ViewDispatcher* view_dispatcher;
     SceneManager* scene_manager;
     NotificationApp* notifications;
+    
+    // UI components
     Widget* widget;
-    Submenu* submenu;           // Pour le menu de sélection
-    FuriTimer* timer;
-    U2fHid* u2f_hid;
+    Submenu* submenu;
     U2fView* u2f_view;
+    
+    // Timers
+    FuriTimer* timer;
+    
+    // U2F (FIDO1) components
+    U2fHid* u2f_hid;
     U2fData* u2f_instance;
-    void* fido2_instance;       // Pour FIDO2
-    void* fido2_hid;            // Pour FIDO2 HID
-    GpioCustomEvent event_cur;
     bool u2f_ready;
-    bool usb_initialized;       // État de l'USB
-    FidoMode fido_mode;          // Mode sélectionné
+    
+    // FIDO2 components
+    void* fido2_instance;
+    void* fido2_hid;
+    
+    // State management
+    GpioCustomEvent event_cur;
+    bool usb_initialized;
+    FidoMode fido_mode;
     U2fAppError error;
+    
+    // Thread safety guards
+    volatile bool exiting;           // Set when app is shutting down
+    volatile bool view_dispatcher_valid;  // Set while view_dispatcher is alive
+    FuriMutex* data_mutex;           // Mutex for thread-safe data access
 };
