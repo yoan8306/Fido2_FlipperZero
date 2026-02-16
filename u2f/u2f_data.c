@@ -33,6 +33,7 @@ typedef struct {
     uint32_t control;
 } FURI_PACKED U2fCounterData;
 
+
 bool u2f_data_check(bool cert_only) {
     bool state = false;
     Storage* fs_api = furi_record_open(RECORD_STORAGE);

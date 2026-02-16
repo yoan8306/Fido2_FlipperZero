@@ -12,6 +12,7 @@ typedef enum {
     U2fMsgAuth,
     U2fMsgSuccess,
     U2fMsgError,
+    U2fMsgFido2Ready,
 } U2fViewMsg;
 
 U2fView* u2f_view_alloc(void);

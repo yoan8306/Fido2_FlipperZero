@@ -1,6 +1,6 @@
 App(
     appid="u2f",
-    name="U2F",
+    name="FIDO2/U2F",
     apptype=FlipperAppType.MENUEXTERNAL,
     entry_point="u2f_app",
     stack_size=2 * 1024,
@@ -10,4 +10,7 @@ App(
     fap_libs=["assets", "mbedtls"],
     fap_category="USB",
     fap_icon="icon.png",
+    fap_version="2.0",
+    fap_author="Flipper Devices / FIDO2 Contrib",
+    fap_description="FIDO2 and U2F authenticator",
 )

@@ -54,15 +54,16 @@ struct U2fApp {
     SceneManager* scene_manager;
     NotificationApp* notifications;
     Widget* widget;
-    Submenu* submenu;           // Nouveau : pour le menu de sélection
+    Submenu* submenu;           // Pour le menu de sélection
     FuriTimer* timer;
     U2fHid* u2f_hid;
     U2fView* u2f_view;
     U2fData* u2f_instance;
-    void* fido2_instance;       // Pour FIDO2 (à implémenter)
+    void* fido2_instance;       // Pour FIDO2
+    void* fido2_hid;            // Pour FIDO2 HID
     GpioCustomEvent event_cur;
     bool u2f_ready;
-    bool usb_initialized;       // Nouveau : état de l'USB
-    FidoMode fido_mode;          // Nouveau : mode sélectionné
+    bool usb_initialized;       // État de l'USB
+    FidoMode fido_mode;          // Mode sélectionné
     U2fAppError error;
 };
